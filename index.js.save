@@ -1,0 +1,11 @@
+const express = require('express'); const app = express(); 
+app.use(express.json());
+// health check route (keep this above listen)
+app.get('/healthz', (_req, res) => res.json({ ok: true }));
+const express = require('express');
+const app = express();
+app.use(express.json());
+
+// health check route (keep this above listen)
+app.get('/healthz', (_req, res) => res.json({ ok: true }));
+

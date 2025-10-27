@@ -1,0 +1,18 @@
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+require('dotenv').config();
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+app.use(helmet());
+
+// health check route (keep this above listen)
+app.get('/healthz', (_req, res) => res.json({ ok: true }));
+const express = require('express');
+
+// health check route (keep this above listen)
+app.get('/healthz', (_req, res) => res.json({ ok: true }));
+
