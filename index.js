@@ -1,4 +1,4 @@
-// Nap Map Backend - clean working version
+// Nap Map Backend - Express + Google Directions API
 process.on('unhandledRejection', r => { console.error('UNHANDLED REJECTION', r); process.exit(1); });
 process.on('uncaughtException', e => { console.error('UNCAUGHT EXCEPTION', e); process.exit(1); });
 
@@ -21,7 +21,7 @@ const GOOGLE_KEY = process.env.GOOGLE_MAPS_API_KEY;
 // Health check
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-// Plan endpoint (Google Directions)
+// PLAN endpoint
 app.post('/api/plan', async (req, res) => {
   try {
     const { origin, destination, arriveAt } = req.body || {};
@@ -32,15 +32,15 @@ app.post('/api/plan', async (req, res) => {
       return res.status(500).json({ ok:false, error:'Missing GOOGLE_MAPS_API_KEY' });
     }
 
-    const targetTime = new Date(arriveAt).getTime();
-    if (Number.isNaN(targetTime)) return res.status(400).json({ ok:false, error:'arriveAt must be ISO8601' });
+    const target = new Date(arriveAt).getTime();
+    if (Number.isNaN(target)) return res.status(400).json({ ok:false, error:'arriveAt must be ISO8601' });
 
     const now = Date.now();
-    let lo = Math.min(now, targetTime - 6*3600_000);
-    let hi = targetTime - 5*60_000;
+    let lo = Math.min(now, target - 6*3600_000);
+    let hi = target - 5*60_000;
     if (hi <= lo) hi = lo + 30*60_000;
 
-    async function getRoute(departMs) {
+    async function getBestRoute(departMs) {
       const { data } = await axios.get('https://maps.googleapis.com/maps/api/directions/json', {
         params: {
           origin, destination, mode:'driving', alternatives:true,
@@ -50,7 +50,6 @@ app.post('/api/plan', async (req, res) => {
         }
       });
       if (data.status !== 'OK' || !data.routes?.length) throw new Error(`Directions error: ${data.status}`);
-
       let best = null;
       for (const r of data.routes) {
         const leg = r.legs?.[0]; if (!leg) continue;
@@ -75,12 +74,12 @@ app.post('/api/plan', async (req, res) => {
                metrics: { totalDuration: best.durationSec, longestStretch: longest, leftTurns:L, rightTurns:R, stops } };
     }
 
-    let bestCandidate = null;
+    let candidate = null;
     for (let i=0;i<12;i++){
       const mid = Math.floor((lo+hi)/2);
-      const best = await getRoute(mid);
+      const best = await getBestRoute(mid);
       const arrive = mid + best.durationSec*1000;
-      const delta = Math.abs(arrive - targetTime);
+      const delta = Math.abs(arrive - target);
       const scored = scoreRoute(best);
       const c = {
         departIso: new Date(mid).toISOString(),
@@ -88,20 +87,24 @@ app.post('/api/plan', async (req, res) => {
         durationSec: best.durationSec,
         score: scored
       };
-      if (!bestCandidate || delta < Math.abs(new Date(bestCandidate.arriveAtIso) - targetTime)) bestCandidate = c;
-      if (arrive > targetTime) hi = mid - 120000; else lo = mid + 120000;
+      if (!candidate || delta < Math.abs(new Date(candidate.arriveAtIso) - target)) candidate = c;
+      if (arrive > target) hi = mid - 120000; else lo = mid + 120000;
       if (delta <= 60000 || (hi - lo) < 120000) break;
     }
-    if (!bestCandidate) return res.status(502).json({ ok:false, error:'No route found' });
+    if (!candidate) return res.status(502).json({ ok:false, error:'No route found' });
 
     const enc = encodeURIComponent;
-    const gArriveUnix = Math.floor(new Date(bestCandidate.arriveAtIso).getTime()/1000);
+    const gArriveUnix = Math.floor(new Date(candidate.arriveAtIso).getTime()/1000);
     const handoff = {
       google: `https://www.google.com/maps/dir/?api=1&origin=${enc(origin)}&destination=${enc(destination)}&travelmode=driving&arrival_time=${gArriveUnix}`,
       apple:  `maps://?saddr=${enc(origin)}&daddr=${enc(destination)}&dirflg=d`
     };
 
-    res.json({ ok:true, provider:'google', ...bestCandidate, handoff });
+    res.json({ ok:true, provider:'google',
+      departIso: candidate.departIso, arriveAtIso: candidate.arriveAtIso,
+      winner: { durationSec: candidate.durationSec, score: candidate.score },
+      handoff
+    });
   } catch (e) {
     console.error(e?.response?.data || e.message || e);
     res.status(500).json({ ok:false, error:'Server error' });
