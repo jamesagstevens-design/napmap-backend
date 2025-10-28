@@ -1,4 +1,4 @@
-// Nap Map Backend - Express + Google Directions API
+// 1) Top: safety + env + imports
 process.on('unhandledRejection', r => { console.error('UNHANDLED REJECTION', r); process.exit(1); });
 process.on('uncaughtException', e => { console.error('UNCAUGHT EXCEPTION', e); process.exit(1); });
 
@@ -9,33 +9,41 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
-// Behind a proxy on Render -> trust it so req.ip is correct
-if (process.env.RENDER || process.env.NODE_ENV === 'production') {
-  app.set('trust proxy', 1);
-}
-
+// 2) Create the app BEFORE any app.set/app.use/app.get
 const app = express();
+
+// 3) Proxy trust BEFORE the limiter (Render sets X-Forwarded-For)
+app.set('trust proxy', 1);
+
+// 4) Core middleware
 app.use(express.json());
 app.use(cors());
 app.use(helmet());
-app.use(rateLimit({ windowMs: 60_000, max: 60 }));
+
+// 5) Rate limiter (you can keep validate:false while stabilising)
+const limiter = rateLimit({
+  windowMs: 60_000,
+  max: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  validate: false
+});
+app.use(limiter);
 
 const PORT = process.env.PORT || 10000;
 const GOOGLE_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
-// Health check
+// 6) Routes (health first)
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 
-// PLAN endpoint
+// 7) Planner route
 app.post('/api/plan', async (req, res) => {
   try {
     const { origin, destination, arriveAt } = req.body || {};
     if (!origin || !destination || !arriveAt) {
       return res.status(400).json({ ok:false, error:'origin, destination, arriveAt are required' });
     }
-    if (!GOOGLE_KEY) {
-      return res.status(500).json({ ok:false, error:'Missing GOOGLE_MAPS_API_KEY' });
-    }
+    if (!GOOGLE_KEY) return res.status(500).json({ ok:false, error:'Missing GOOGLE_MAPS_API_KEY' });
 
     const target = new Date(arriveAt).getTime();
     if (Number.isNaN(target)) return res.status(400).json({ ok:false, error:'arriveAt must be ISO8601' });
@@ -55,6 +63,7 @@ app.post('/api/plan', async (req, res) => {
         }
       });
       if (data.status !== 'OK' || !data.routes?.length) throw new Error(`Directions error: ${data.status}`);
+
       let best = null;
       for (const r of data.routes) {
         const leg = r.legs?.[0]; if (!leg) continue;
@@ -116,4 +125,6 @@ app.post('/api/plan', async (req, res) => {
   }
 });
 
+// 8) Listen (MUST be last)
 app.listen(PORT, () => console.log(`Nap Map backend running on port ${PORT}`));
+
