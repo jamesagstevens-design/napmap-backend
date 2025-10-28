@@ -9,6 +9,11 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
+// Behind a proxy on Render -> trust it so req.ip is correct
+if (process.env.RENDER || process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
 const app = express();
 app.use(express.json());
 app.use(cors());
